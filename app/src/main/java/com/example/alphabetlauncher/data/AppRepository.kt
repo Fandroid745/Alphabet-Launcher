@@ -68,17 +68,17 @@ class DefaultAppRepository(
 
     override fun launchApp(packageName: String): Boolean {
         return try {
-            val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
+
+            if (intent == null) {
+                return false
             }
-            if (intent != null) {
-                context.startActivity(intent)
-                true
-            } else {
-                false
-            }
+
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+
+            true
         } catch (e: Exception) {
-            e.printStackTrace()
             false
         }
     }
