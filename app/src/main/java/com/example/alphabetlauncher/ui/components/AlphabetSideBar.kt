@@ -20,8 +20,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -38,10 +41,7 @@ import kotlin.math.roundToInt
 
 private val ALPHABET = ('A'..'Z').toList()
 
-/**
- * Custom A–Z vertical sidebar with interactive real-time touch drag tracking,
- * Gaussian curve bulge bending math, enlarged letter bubble, and spring physics overshoot.
- */
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun AlphabetSideBar(
@@ -53,7 +53,10 @@ fun AlphabetSideBar(
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
 
-    // Spring animatable for the maximum horizontal curve bulge displacement (dp)
+    // Current finger position as a ratio of the sidebar height.
+    var touchYRatio by remember { mutableFloatStateOf(0f) }
+
+    // Maximum horizontal displacement of the curve.
     val maxBulgeAnim = remember { Animatable(0f) }
 
     BoxWithConstraints(
@@ -63,41 +66,61 @@ fun AlphabetSideBar(
     ) {
         val totalHeightPx = with(density) { maxHeight.toPx() }
 
-        // Number of items in sidebar: Star (1) + 26 Letters + Dot (1) = 28 items
+        // Star + 26 letters + bottom dot.
         val itemHeightPx = totalHeightPx / (ALPHABET.size + 2)
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInteropFilter { motionEvent ->
-                    when (motionEvent.action) {
-                        MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                            val touchY = motionEvent.y.coerceIn(0f, totalHeightPx)
+
+                    when (motionEvent.actionMasked) {
+
+                        MotionEvent.ACTION_DOWN,
+                        MotionEvent.ACTION_MOVE -> {
+
+                            val touchY = motionEvent.y
+                                .coerceIn(0f, totalHeightPx)
+
                             val ratio = touchY / totalHeightPx
 
-                            // Determine letter index corresponding to touch Y
+                            touchYRatio = ratio
+
+                            // Determine which letter is under the finger.
                             val letterIndex = ((touchY / itemHeightPx) - 1)
                                 .roundToInt()
                                 .coerceIn(0, ALPHABET.size - 1)
 
                             val letter = ALPHABET[letterIndex]
-                            onLetterSelected(letter, ratio)
 
-                            // Animate bulge target to max displacement (~110dp)
-                            coroutineScope.launch {
-                                maxBulgeAnim.animateTo(
-                                    targetValue = 110f,
-                                    animationSpec = spring(
-                                        stiffness = Spring.StiffnessHigh
+                            onLetterSelected(
+                                letter,
+                                ratio
+                            )
+
+                            // Start/maintain the curve animation.
+                            if (maxBulgeAnim.value < 100f) {
+                                coroutineScope.launch {
+                                    maxBulgeAnim.animateTo(
+                                        targetValue = 110f,
+                                        animationSpec = spring(
+                                            stiffness = Spring.StiffnessHigh
+                                        )
                                     )
-                                )
+                                }
                             }
+
                             true
                         }
 
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        MotionEvent.ACTION_UP,
+                        MotionEvent.ACTION_CANCEL -> {
+
+                            touchYRatio = 0f
+
                             onFingerReleased()
-                            // Spring overshoot and snap back to straight line
+
+                            // Return the curve to its normal straight position.
                             coroutineScope.launch {
                                 maxBulgeAnim.animateTo(
                                     targetValue = 0f,
@@ -107,6 +130,7 @@ fun AlphabetSideBar(
                                     )
                                 )
                             }
+
                             true
                         }
 
@@ -114,12 +138,13 @@ fun AlphabetSideBar(
                     }
                 }
         ) {
-            // Render Star + A-Z Column + Dot
+
             Column(
                 modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Top Star Icon
+
+                // Star at the top.
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -130,47 +155,82 @@ fun AlphabetSideBar(
                         imageVector = Icons.Default.Star,
                         contentDescription = "Star",
                         modifier = Modifier.size(12.dp),
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                        tint = MaterialTheme.colorScheme.onBackground.copy(
+                            alpha = 0.6f
+                        )
                     )
                 }
 
-                // 26 Alphabet Letters
+                // A–Z letters.
                 ALPHABET.forEachIndexed { index, letter ->
-                    val letterCenterY = itemHeightPx * (index + 1.5f)
-                    val currentTouchY = (selectedLetter?.let {
-                        val selIdx = ALPHABET.indexOf(it)
-                        if (selIdx != -1) itemHeightPx * (selIdx + 1.5f) else null
-                    }) ?: 0f
 
-                    // Gaussian curve displacement formula
-                    val distance = kotlin.math.abs(letterCenterY - currentTouchY)
-                    val sigma = itemHeightPx * 2.8f
-                    val gaussianFactor = exp(-((distance * distance) / (2 * sigma * sigma)))
-                    val horizontalShiftDp = -1 * (maxBulgeAnim.value * gaussianFactor)
+                    val letterCenterY =
+                        itemHeightPx * (index + 1.5f)
 
-                    val isSelected = (selectedLetter == letter)
+                    // IMPORTANT:
+                    // Use the actual finger position rather than the
+                    // selected letter's position.
+                    val currentTouchY =
+                        touchYRatio * totalHeightPx
+
+                    val distance =
+                        kotlin.math.abs(letterCenterY - currentTouchY)
+
+                    val sigma =
+                        itemHeightPx * 2.8f
+
+                    val gaussianFactor =
+                        exp(
+                            -(
+                                    (distance * distance) /
+                                            (2 * sigma * sigma)
+                                    )
+                        )
+
+                    val horizontalShiftDp =
+                        -maxBulgeAnim.value * gaussianFactor
+
+                    val isSelected =
+                        selectedLetter == letter
 
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxSize()
-                            .offset { IntOffset(x = with(density) { horizontalShiftDp.dp.roundToPx() }, y = 0) },
+                            .offset {
+                                IntOffset(
+                                    x = with(density) {
+                                        horizontalShiftDp.dp.roundToPx()
+                                    },
+                                    y = 0
+                                )
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = letter.toString(),
-                            fontSize = if (isSelected) 14.sp else 10.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = if (isSelected) {
+                                14.sp
+                            } else {
+                                10.sp
+                            },
+                            fontWeight = if (isSelected) {
+                                FontWeight.Bold
+                            } else {
+                                FontWeight.Normal
+                            },
                             color = if (isSelected) {
                                 MaterialTheme.colorScheme.primary
                             } else {
-                                MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                                MaterialTheme.colorScheme.onBackground.copy(
+                                    alpha = 0.7f
+                                )
                             }
                         )
                     }
                 }
 
-                // Bottom Dot Icon
+                // Bottom dot.
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -181,27 +241,42 @@ fun AlphabetSideBar(
                         modifier = Modifier
                             .size(4.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+                            .background(
+                                MaterialTheme.colorScheme.onBackground.copy(
+                                    alpha = 0.6f
+                                )
+                            )
                     )
                 }
             }
 
-            // Floating Circular Letter Bubble (Left of finger)
+            // Enlarged letter bubble.
+            // Its Y position follows the actual finger.
             if (selectedLetter != null && maxBulgeAnim.value > 10f) {
-                val currentTouchY = (ALPHABET.indexOf(selectedLetter).takeIf { it != -1 } ?: 0)
-                val bubbleCenterY = itemHeightPx * (currentTouchY + 1.5f)
+
+                val bubbleCenterY =
+                    touchYRatio * totalHeightPx
 
                 Box(
                     modifier = Modifier
                         .offset {
                             IntOffset(
-                                x = with(density) { (-130.dp).roundToPx() },
-                                y = (bubbleCenterY - with(density) { 30.dp.roundToPx() }).roundToInt()
+                                x = with(density) {
+                                    (-130.dp).roundToPx()
+                                },
+                                y = (
+                                        bubbleCenterY -
+                                                with(density) {
+                                                    30.dp.toPx()
+                                                }
+                                        ).roundToInt()
                             )
                         }
                         .size(60.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary),
+                        .background(
+                            MaterialTheme.colorScheme.primary
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
